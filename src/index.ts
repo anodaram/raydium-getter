@@ -1,30 +1,20 @@
 import { Connection, PublicKey } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { Metaplex } from "@metaplex-foundation/js";
-import {
-	TokenAccount,
-	SPL_ACCOUNT_LAYOUT,
-	LIQUIDITY_STATE_LAYOUT_V4,
-} from "@raydium-io/raydium-sdk";
+import { LIQUIDITY_STATE_LAYOUT_V4 } from "@raydium-io/raydium-sdk";
 import axios from "axios";
 
 const RPC_URL = "https://api.mainnet-beta.solana.com";
-const POOL_ADDRESSES_URL =
-	"https://api.raydium.io/v2/sdk/liquidity/mainnet.json";
+const POOL_PAIRS_URL = "https://api.raydium.io/v2/main/pairs";
 
-async function getPoolAddressFromMint(mintAddress: string) {
-	const response = await axios.get(POOL_ADDRESSES_URL);
-	// console.log(response);
-	const poolInfo = response.data.official.find(
-		(pool: any) =>
-			pool.baseMint === mintAddress || pool.quoteMint === mintAddress
-	);
-	if (poolInfo) return poolInfo.id;
-	const poolInfo2 = response.data.unOfficial.find(
-		(pool: any) =>
-			pool.baseMint === mintAddress || pool.quoteMint === mintAddress
-	);
-	if (poolInfo2) return poolInfo2.id;
+function commafy(num: number) {
+	var str = num.toString().split(".");
+	if (str[0].length >= 5) {
+		str[0] = str[0].replace(/(\d)(?=(\d{3})+$)/g, "$1,");
+	}
+	if (str[1] && str[1].length >= 5) {
+		str[1] = str[1].replace(/(\d{3})/g, "$1 ");
+	}
+	return str.join(".");
 }
 
 async function getTokenMetadata(mintAddress: PublicKey) {
@@ -52,41 +42,38 @@ async function getTokenMetadata(mintAddress: PublicKey) {
 }
 
 async function getLiqPoolInfo(mintAddress: string) {
+	const response = await axios.get(POOL_PAIRS_URL);
+	const poolInfo = response.data.find(
+		(pool: any) =>
+			pool.baseMint === mintAddress || pool.quoteMint === mintAddress
+	);
+	if (!poolInfo) return {};
 	const connection = new Connection(RPC_URL);
-	// const poolAddress = await getPoolAddressFromMint(mintAddress);
-	const poolAddress = "Crsqyrc9LW3KHJE1i6SXZimWbTpBkvfhuk8pvxbYJV16";
-	if (!poolAddress) {
-		console.log("Can't find such pool");
-		return {};
-	}
+	const poolAddress = new PublicKey(poolInfo.ammId);
+	const liquidity = poolInfo.liquidity;
+	const liquidityPoolMint = new PublicKey(poolInfo.lpMint);
 	const info = await connection.getAccountInfo(new PublicKey(poolAddress));
 	if (!info) return {};
 	const poolState = LIQUIDITY_STATE_LAYOUT_V4.decode(info.data);
-	console.log(poolState);
-  const quoteSymbol = (await getTokenMetadata(poolState.quoteMint)).tokenSymbol;
+	const decimals = parseInt(poolState.baseDecimal);
+	// console.log(poolState);
+	const quoteSymbol = (await getTokenMetadata(poolState.quoteMint)).tokenSymbol;
 	const baseSymbol = (await getTokenMetadata(poolState.baseMint)).tokenSymbol;
 
-	const liquidityPoolMint = poolState.lpMint.toBase58();
-	const liquidity =
-		poolState.lpReserve / 10 ** parseInt(poolState.quoteDecimal);
-	const locked = "";
-
-
-  console.log({
-    volMaxCutRatio: poolState.volMaxCutRatio.toString(),
-    amountWaveRatio: poolState.amountWaveRatio.toString(),
-    swapBaseInAmount: poolState.swapBaseInAmount / 10 ** parseInt(poolState.quoteDecimal),
-    swapBaseOutAmount: poolState.swapBaseOutAmount / 10 ** parseInt(poolState.quoteDecimal),
-    swapQuoteInAmount: poolState.swapQuoteInAmount / 10 ** parseInt(poolState.quoteDecimal),
-    swapQuoteOutAmount: poolState.swapQuoteOutAmount / 10 ** parseInt(poolState.quoteDecimal),
-  });
+	const lpInfo = (await connection.getParsedAccountInfo(
+		liquidityPoolMint
+	)) as any;
+	const totalSupply =
+		parseInt(lpInfo.value?.data?.parsed.info.supply) / 10 ** decimals;
+	const lpReserve = poolState.lpReserve / 10 ** decimals;
+	const locked = 1 - totalSupply / lpReserve;
 
 	return {
-		address: poolAddress,
+		address: poolAddress.toBase58(),
 		pair: `${baseSymbol} / ${quoteSymbol}`,
-		liquidityPoolMint,
-		liquidity,
-		locked,
+		liquidityPoolMint: liquidityPoolMint.toBase58(),
+		liquidity: `$${commafy(Math.floor(liquidity))}`,
+		locked: `${(locked * 100).toFixed(2)} %`,
 	};
 }
 
@@ -94,15 +81,6 @@ async function main() {
 	console.log(
 		await getLiqPoolInfo("9ceEjz32cv8jBcqsppgjrryiE2tor7PCm7j9mYk8gzTk")
 	);
-	// console.log(await getLiqPoolInfo("58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2"));
 }
 
 main();
-
-/*
-Address: Crsqyrc9LW3KHJE1i6SXZimWbTpBkvfhuk8pvxbYJV16
-Pair: BABYWIF / SOL
-Liquidity pool mint: CxNEDGgmP1HhirRjCzket7cJTbH42ff8guJDc6jAy51c
-Liquidity: $113,610
-Locked: 98.80%
-*/
